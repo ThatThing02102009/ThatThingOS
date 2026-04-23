@@ -140,6 +140,7 @@ RUN cp .config /out/boot/config-thatthing
 
 FROM scratch
 COPY --from=kernel-builder /out /out
+CMD ["/bin/sh"]
 EOF
 
     log "Building kernel Docker image (this takes ~15-20 min)..."
@@ -152,10 +153,12 @@ EOF
     mkdir -p "$BUILD_DIR/out_kernel"
 
     # Extract using a temporary container
-    local CID
-    CID=$(docker create thatthing-kernel-v3)
-    docker cp "$CID:/out/." "$BUILD_DIR/out_kernel/"
-    docker rm -v "$CID"
+    CONTAINER_ID=$(docker create thatthing-kernel-v3)
+    docker cp $CONTAINER_ID:/out/. "$BUILD_DIR/out_kernel/"
+    docker rm $CONTAINER_ID
+
+    # Step Dependency Marker
+    touch "$BUILD_DIR/kernel_ready.txt"
 
     local kver
     kver=$(ls "$BUILD_DIR/out_kernel/lib/modules/" | head -1)

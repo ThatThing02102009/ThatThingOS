@@ -29,7 +29,7 @@ apply_overlays() {
     sudo unsquashfs -d "$UNSQUASH_DIR" "$SQFS_FILE" > /dev/null
 
     # ── Kernel modules ─────────────────────────────────────────────────
-    if [ -d "$BUILD_DIR/out_kernel/lib/modules" ]; then
+    if [ -f "$BUILD_DIR/kernel_ready.txt" ] && [ -d "$BUILD_DIR/out_kernel/lib/modules" ]; then
         log "Injecting kernel modules..."
         sudo mkdir -p "$UNSQUASH_DIR/lib/modules"
         sudo cp -a "$BUILD_DIR/out_kernel/lib/modules/"* "$UNSQUASH_DIR/lib/modules/"

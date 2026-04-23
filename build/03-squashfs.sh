@@ -115,6 +115,7 @@ RUN mksquashfs / /rootfs.img \
     -all-root \
     -mem $SQFS_MEM
 
+CMD ["/bin/sh"]
 EOF
 
     log "Building Alpine rootfs Docker image (SQFS_MEM=$HOST_MEM_SQFS)..."
@@ -128,10 +129,9 @@ EOF
     rm -rf "$BUILD_DIR/docker_out"
     mkdir -p "$BUILD_DIR/docker_out"
 
-    local CID
-    CID=$(docker create thatthing-rootfs-v3)
-    docker cp "$CID:/rootfs.img" "$BUILD_DIR/docker_out/rootfs.img"
-    docker rm -v "$CID"
+    CONTAINER_ID=$(docker create thatthing-rootfs-v3)
+    docker cp $CONTAINER_ID:/rootfs.img "$BUILD_DIR/docker_out/rootfs.img"
+    docker rm $CONTAINER_ID
 
     local sz
     sz=$(du -sh "$BUILD_DIR/docker_out/rootfs.img" | cut -f1)
