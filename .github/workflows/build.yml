@@ -1,0 +1,32 @@
+name: ThatThingOS Auto Build
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential squashfs-tools xorriso mtools dosfstools zstd bc kmod cpio flex bison libelf-dev libssl-dev
+
+      - name: Execute Build Script
+        run: |
+          # Cấp quyền thực thi và chạy script
+          chmod +x build.sh
+          # Chạy sudo vì script của bạn có thể cần quyền root để mount/chroot
+          sudo ./build.sh all
+        
+      - name: Release ISO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ThatThingOS-v3-ISO
+          path: out/*.iso

@@ -1,0 +1,62 @@
+#!/bin/sh
+########################################################################
+# ThatThingOS v3.0 — SHUTDOWN SYNC (blocking, high-priority)
+# File: /etc/local.d/99-shutdown-sync.stop
+# (OpenRC local.d: .stop suffix = runs at system stop/shutdown)
+#
+# This is the LAST LINE OF DEFENSE before power cuts.
+# Must complete within TIMEOUT_SECS or the data is lost.
+#
+# Execution order: lazy-sync.stop → ... → 99-shutdown-sync.stop → halt
+########################################################################
+OVERLAY_UPPER="/dev/shm/overlay_upper"
+PERSIST_MNT="/media/persist"
+TIMEOUT_SECS=60
+LOG_TAG="shutdown-sync"
+
+_log()  { logger -t "$LOG_TAG" "$*"; echo "[SHUTDOWN-SYNC] $*" > /dev/console; }
+_warn() { logger -p user.warn -t "$LOG_TAG" "$*"; echo "[SHUTDOWN-SYNC WARN] $*" > /dev/console; }
+
+echo -e "\033[35m[SHUTDOWN-SYNC]\033[0m Final RAM→HDD flush — do not power off..." > /dev/console
+
+persist_dev=""
+[ -f /run/thatthing-persist-dev ] && persist_dev=$(cat /run/thatthing-persist-dev)
+
+if [ -z "$persist_dev" ]; then
+    _warn "No persist device found — session data NOT saved."
+    exit 0
+fi
+
+# Ensure mounted R/W
+if ! mountpoint -q "$PERSIST_MNT" 2>/dev/null; then
+    mkdir -p "$PERSIST_MNT"
+    mount -o rw,relatime "$persist_dev" "$PERSIST_MNT" 2>/dev/null \
+        || { _warn "Cannot mount $persist_dev — data NOT saved!"; exit 1; }
+fi
+
+mkdir -p "$PERSIST_MNT/upper"
+
+_log "Syncing RAM overlay → HDD (timeout: ${TIMEOUT_SECS}s)..."
+
+START=$(date +%s)
+
+timeout "$TIMEOUT_SECS" rsync -aAX --delete --no-whole-file --inplace \
+    "$OVERLAY_UPPER/" "$PERSIST_MNT/upper/" 2>&1 \
+    | logger -t "$LOG_TAG"
+
+EXIT_CODE=$?
+ELAPSED=$(( $(date +%s) - START ))
+
+case $EXIT_CODE in
+    0)  _log "Shutdown sync OK in ${ELAPSED}s. Safe to power off." ;;
+   24)  _log "Shutdown sync OK (some files vanished during sync) in ${ELAPSED}s." ;;
+  124)  _warn "TIMEOUT after ${TIMEOUT_SECS}s! Partial data saved (partial is better than none)." ;;
+    *)  _warn "rsync exited with code $EXIT_CODE after ${ELAPSED}s." ;;
+esac
+
+# Force kernel buffer flush
+sync
+umount "$PERSIST_MNT" 2>/dev/null || true
+
+echo -e "\033[32m[SHUTDOWN-SYNC]\033[0m Done. You may power off." > /dev/console
+exit 0

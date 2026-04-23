@@ -1,0 +1,15 @@
+set default_mem_type="zram"
+set default_mem_size="100%"
+set default_comp_algorithm="zstd"
+
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=3
+GRUB_TIMEOUT_STYLE=menu
+GRUB_DISTRIBUTOR="ThatThingOS"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet loglevel=3 vt.global_cursor_default=0 mitigations=off zswap.enabled=0 copytoram=y zram.num_devices=1 net.ifnames=0 biosdevname=0 pci=noaer video=eDP-1:d video=LVDS-1:d"
+GRUB_CMDLINE_LINUX=""
+GRUB_GFXMODE=auto
+GRUB_GFXPAYLOAD_LINUX=keep
+GRUB_TERMINAL_INPUT=console
+GRUB_TERMINAL_OUTPUT=gfxterm
+GRUB_BACKGROUND=""

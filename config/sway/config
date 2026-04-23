@@ -1,0 +1,123 @@
+# ─── ThatThingOS — Sway Configuration ────────────────────────────────
+# ~/.config/sway/config
+# Target: Intel HD 3000 / Wayland / no compositor effects
+# ─────────────────────────────────────────────────────────────────────
+
+### ── Variables ──────────────────────────────────────────────────────
+set $mod  Mod4
+set $term foot
+set $menu wofi --show drun --style ~/.config/wofi/style.css --prompt "EXEC:"
+
+### ── Output / Display ───────────────────────────────────────────────
+output * bg #0a0a0f solid_color
+output * adaptive_sync on
+
+# HD 3000 best-effort — no tearing, software rendering OK
+output * render_bit_depth 8
+
+### ── Fonts ──────────────────────────────────────────────────────────
+font pango:JetBrainsMono Nerd Font 10
+
+### ── Window appearance ──────────────────────────────────────────────
+default_border pixel 2
+default_floating_border pixel 2
+hide_edge_borders smart
+gaps inner 6
+gaps outer 3
+
+# class                  border   bg       text     indicator child_border
+client.focused           #00FFCC  #0a0a0f  #00FFCC  #00FFCC   #00FFCC
+client.unfocused         #1a1a2e  #0a0a0f  #555577  #1a1a2e   #1a1a2e
+client.focused_inactive  #1a1a2e  #0a0a0f  #888899  #1a1a2e   #1a1a2e
+client.urgent            #FF2D55  #0a0a0f  #FF2D55  #FF2D55   #FF2D55
+
+### ── Input ──────────────────────────────────────────────────────────
+input "type:keyboard" {
+    xkb_layout us
+    xkb_options caps:escape   # Caps → Escape for vim fanatics
+    repeat_delay 200
+    repeat_rate 40
+}
+
+input "type:touchpad" {
+    dwt enabled
+    tap enabled
+    natural_scroll enabled
+    middle_emulation enabled
+}
+
+### ── Key bindings ───────────────────────────────────────────────────
+# Core
+bindsym $mod+Return       exec $term
+bindsym $mod+d            exec $menu
+bindsym $mod+q            kill
+bindsym $mod+Shift+r      reload
+bindsym $mod+Shift+e      exec swaynag -t warning -m 'Exit?' -b 'yes' 'swaymsg exit'
+
+# Focus
+bindsym $mod+h            focus left
+bindsym $mod+j            focus down
+bindsym $mod+k            focus up
+bindsym $mod+l            focus right
+
+# Move
+bindsym $mod+Shift+h      move left
+bindsym $mod+Shift+j      move down
+bindsym $mod+Shift+k      move up
+bindsym $mod+Shift+l      move right
+
+# Layout
+bindsym $mod+s            layout stacking
+bindsym $mod+w            layout tabbed
+bindsym $mod+e            layout toggle split
+bindsym $mod+f            fullscreen toggle
+bindsym $mod+Shift+space  floating toggle
+bindsym $mod+space        focus mode_toggle
+
+# Screenshots
+bindsym $mod+Print        exec grim ~/screenshots/$(date +%F_%H%M%S).png
+bindsym $mod+Shift+Print  exec grim -g "$(slurp)" ~/screenshots/$(date +%F_%H%M%S).png
+
+# Scripts quick-launch
+bindsym $mod+n            exec $term -e bash -c '~/scripts/net_sniff.sh; read'
+bindsym $mod+p            exec $term -e bash -c '~/scripts/packet_probe.sh; read'
+
+# Workspaces
+bindsym $mod+1            workspace 1
+bindsym $mod+2            workspace 2
+bindsym $mod+3            workspace 3
+bindsym $mod+4            workspace 4
+bindsym $mod+5            workspace 5
+
+bindsym $mod+Shift+1      move container to workspace 1
+bindsym $mod+Shift+2      move container to workspace 2
+bindsym $mod+Shift+3      move container to workspace 3
+bindsym $mod+Shift+4      move container to workspace 4
+bindsym $mod+Shift+5      move container to workspace 5
+
+### ── Bar ────────────────────────────────────────────────────────────
+bar {
+    position top
+    status_command ~/.config/sway/statusbar.sh
+    font pango:JetBrainsMono Nerd Font 9
+
+    colors {
+        background         #0a0a0f
+        statusline         #00FFCC
+        separator          #1a1a2e
+        focused_workspace  #00FFCC #0a0a0f #00FFCC
+        active_workspace   #1a1a2e #0a0a0f #888899
+        inactive_workspace #0a0a0f #0a0a0f #555577
+        urgent_workspace   #FF2D55 #0a0a0f #FF2D55
+    }
+}
+
+### ── Autostart ──────────────────────────────────────────────────────
+exec_always ~/.config/sway/init.sh
+exec        mako        # notification daemon
+exec        pipewire
+exec        wireplumber
+
+### ── Floating rules ─────────────────────────────────────────────────
+for_window [app_id="prismlauncher"]  floating enable
+for_window [app_id="pavucontrol"]    floating enable

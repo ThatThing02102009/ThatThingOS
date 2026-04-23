@@ -1,0 +1,22 @@
+# Build artifacts
+build/docker_out/
+build/initramfs_root/
+build/iso_root/
+build/kernel/
+build/out_kernel/
+build/squash_rw/
+
+# Output and temporary files
+out/
+tmp/
+build_log.txt
+build/final_sqfs_path.txt
+build/sqfs_path.txt
+
+# Binary and large formats
+*.iso
+*.img
+*.so
+*.bin
+*.out
+*.log

@@ -1,0 +1,252 @@
+#!/bin/ash
+########################################################################
+# ThatThingOS v3.0 — initramfs /init
+# Strategy: Boot-to-RAM + 3-Tier Hybrid Overlay
+#
+# Tier 1 (lower): SquashFS copied to /dev/shm — 100% RAM, HDD bypassed
+# Tier 2 (upper): tmpfs in RAM — all writes are fast, zero HDD I/O
+# Tier 3 (persist): THATHING_DATA (ext4 on /dev/sda2) — lazy sync target
+#
+# The HDD is NEVER written during normal operation.
+# Writes go RAM→HDD only via lazy-sync (periodic) and shutdown-sync (final).
+#
+# Display fix: kernel cmdline already has video=eDP-1:d video=LVDS-1:d
+########################################################################
+
+### ── Constants ──────────────────────────────────────────────────────
+PERSIST_LABEL="THATHING_DATA"
+NEW_ROOT="/newroot"
+LIVE_MEDIUM="/live_medium"
+LIVE_SQUASH="/live_squash"
+RAM_SQF="/dev/shm/rootfs.img"
+PERSIST_MNT="/.persist"
+OVERLAY_UPPER="/dev/shm/overlay_upper"
+OVERLAY_WORK="/dev/shm/overlay_work"
+
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+### ── Minimal mounts ─────────────────────────────────────────────────
+mount -t proc  proc  /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /dev/shm -o size=3500M  # cap to leave kernel headroom
+
+### ── Logging ─────────────────────────────────────────────────────────
+_log()  { echo -e "\033[36m[THATTHING]\033[0m $*" > /dev/console; }
+_warn() { echo -e "\033[33m[  WARN  ]\033[0m $*" > /dev/console; }
+_die()  { echo -e "\033[31m[  FATAL ]\033[0m $*" > /dev/console; exec /bin/sh; }
+
+### ── Banner ──────────────────────────────────────────────────────────
+clear > /dev/console
+cat > /dev/console <<'BANNER'
+
+  ████████╗██╗  ██╗ █████╗ ████████╗████████╗██╗  ██╗██╗███╗   ██╗ ██████╗
+     ██║   ███████║███████║   ██║      ██║   ███████║██║██╔██╗ ██║██║  ███╗
+     ██║   ██╔══██║██╔══██║   ██║      ██║   ██╔══██║██║██║╚██╗██║██║   ██║
+     ██║   ██║  ██║██║  ██║   ██║      ██║   ██║  ██║██║██║ ╚████║╚██████╔╝
+
+  v3.0 "RAM SOVEREIGN" — ALL WRITES GO TO RAM FIRST.
+BANNER
+sleep 0.5
+
+### ── ZRAM Swap (set up early to expand effective memory) ────────────
+_setup_zram() {
+    modprobe zram num_devices=1 2>/dev/null || true
+    local mem_kb
+    mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+    # 50% of physical RAM as swap — on 4GB = 2GB compressed swap
+    local zram_bytes=$(( mem_kb * 1024 / 2 ))
+
+    # Prefer zstd for better compression on i5-2430M with AES-NI
+    echo zstd > /sys/block/zram0/comp_algorithm 2>/dev/null \
+        || echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null \
+        || true
+    echo "$zram_bytes" > /sys/block/zram0/disksize 2>/dev/null || true
+    mkswap /dev/zram0 >/dev/null 2>&1 && swapon -p 100 /dev/zram0 2>/dev/null || true
+    _log "ZRAM swap: $(( zram_bytes / 1048576 ))MB ready"
+}
+
+### ── Load essential modules ──────────────────────────────────────────
+_load_modules() {
+    for mod in squashfs overlay loop ext4 vfat isofs i915 drm drm_kms_helper; do
+        modprobe "$mod" 2>/dev/null || true
+    done
+}
+
+### ── Wait for block devices ──────────────────────────────────────────
+_wait_devices() {
+    _log "Waiting for block devices..."
+    local retries=40
+    while [ $retries -gt 0 ]; do
+        [ -e /dev/sda ] || [ -e /dev/sr0 ] || [ -e /dev/nvme0n1 ] && return 0
+        sleep 0.25
+        retries=$(( retries - 1 ))
+    done
+    _warn "No block devices detected in 10s. Continuing..."
+    return 1
+}
+
+### ── Find Ventoy live device ─────────────────────────────────────────
+_find_live_device() {
+    for dev in $(blkid -o device 2>/dev/null); do
+        local lbl
+        lbl=$(blkid -s LABEL -o value "$dev" 2>/dev/null || true)
+        case "$lbl" in
+            ventoy|VTOYEFI|CDROM) echo "$dev"; return ;;
+        esac
+    done
+    # Fallback: scan optical drives
+    for dev in /dev/sr0 /dev/sr1; do
+        [ -b "$dev" ] && echo "$dev" && return
+    done
+    echo ""
+}
+
+### ── Mount live medium ───────────────────────────────────────────────
+_mount_live() {
+    local dev="$1"
+    mkdir -p "$LIVE_MEDIUM" "$LIVE_SQUASH"
+    mount -o ro "$dev" "$LIVE_MEDIUM" \
+        || _die "Cannot mount live device: $dev"
+
+    local sqfs
+    sqfs=$(find "$LIVE_MEDIUM" \( -name 'rootfs.img' -o -name '*.sfs' \) 2>/dev/null | head -1)
+    [ -z "$sqfs" ] && _die "No squashfs found on $dev"
+
+    _log "Found squashfs: $sqfs"
+    echo "$sqfs"
+}
+
+### ── CORE: Copy squashfs to RAM ──────────────────────────────────────
+# This bypasses the 5400 RPM HDD for ALL runtime I/O.
+# ~800MB squashfs → occupies ~800MB of 3500MB /dev/shm budget.
+_copytoram() {
+    local sqfs_src="$1"
+    local sqfs_size_mb
+    sqfs_size_mb=$(( $(stat -c%s "$sqfs_src" 2>/dev/null || echo 0) / 1048576 ))
+
+    local mem_avail_mb
+    mem_avail_mb=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
+
+    _log "SquashFS: ${sqfs_size_mb}MB | RAM available: ${mem_avail_mb}MB"
+
+    if [ "$mem_avail_mb" -lt $(( sqfs_size_mb + 512 )) ]; then
+        _warn "Insufficient RAM for full copy. Mounting squashfs directly from device."
+        mount -t squashfs -o ro,loop "$sqfs_src" "$LIVE_SQUASH" \
+            || _die "Cannot mount squashfs from $sqfs_src"
+        return
+    fi
+
+    _log "Copying squashfs to RAM (this is a one-time cost)..."
+    cp "$sqfs_src" "$RAM_SQF" || _die "RAM copy failed — check available memory."
+
+    # Unmount the live medium partition — we no longer need the HDD/USB
+    umount "$LIVE_SQUASH" 2>/dev/null || true
+
+    mount -t squashfs -o ro,loop "$RAM_SQF" "$LIVE_SQUASH" \
+        || _die "Cannot mount RAM squashfs"
+
+    _log "Boot-to-RAM complete. HDD I/O is now IDLE."
+}
+
+### ── Find persistence partition ──────────────────────────────────────
+_find_persist() {
+    blkid -L "$PERSIST_LABEL" 2>/dev/null || true
+}
+
+### ── Mount persistence HDD and set up hybrid overlay ─────────────────
+#
+# Key distinction vs old design:
+#   OLD: upperdir was on HDD (every write = HDD I/O)
+#   NEW: upperdir is tmpfs in RAM, HDD only gets rsync'd periodically
+#
+_mount_hybrid_overlay() {
+    local persist_dev="$1"
+
+    # Mount HDD persistence partition — read-only reference at init time.
+    # The lazy-sync service will mount it R/W later to flush changes.
+    mkdir -p "$PERSIST_MNT"
+    mount -o rw,relatime "$persist_dev" "$PERSIST_MNT" \
+        || { _warn "Cannot mount persist partition $persist_dev. Volatile mode."; _mount_volatile; return; }
+
+    # RAM upper layer — all writes land here at full RAM speed
+    mkdir -p "$OVERLAY_UPPER" "$OVERLAY_WORK" "$NEW_ROOT"
+
+    # Seed upper from HDD persistence store (if it has prior session data).
+    # This restores /etc/shadow, wpa_supplicant.conf, /home, etc.
+    if [ -d "$PERSIST_MNT/upper" ] && [ "$(ls -A "$PERSIST_MNT/upper" 2>/dev/null)" ]; then
+        _log "Seeding RAM overlay from HDD persistence store..."
+        cp -a "$PERSIST_MNT/upper/." "$OVERLAY_UPPER/" 2>/dev/null || true
+    fi
+
+    # Build 3-tier overlayfs
+    mount -t overlay overlay \
+        -o "lowerdir=$LIVE_SQUASH,upperdir=$OVERLAY_UPPER,workdir=$OVERLAY_WORK" \
+        "$NEW_ROOT" \
+        || { _warn "Overlay mount failed. Falling back to volatile."; _mount_volatile; return; }
+
+    _log "Hybrid overlay active: writes → RAM | persist → $persist_dev (lazy flush)"
+
+    # Make persist mount available inside the new root for lazy-sync
+    # lazy-sync will mount it R/W itself when flushing
+    mkdir -p "$NEW_ROOT$PERSIST_MNT"
+    echo "$persist_dev" > "$NEW_ROOT/run/persist_dev" 2>/dev/null || true
+}
+
+### ── Volatile fallback (no persistence) ─────────────────────────────
+_mount_volatile() {
+    _warn "VOLATILE MODE: changes will NOT survive reboot."
+    mkdir -p "$OVERLAY_UPPER" "$OVERLAY_WORK" "$NEW_ROOT"
+    mount -t overlay overlay \
+        -o "lowerdir=$LIVE_SQUASH,upperdir=$OVERLAY_UPPER,workdir=$OVERLAY_WORK" \
+        "$NEW_ROOT" \
+        || { _warn "Overlay failed. Bind-mounting squashfs read-only."; mount --bind "$LIVE_SQUASH" "$NEW_ROOT"; }
+}
+
+### ══════════════════════════════════════════════════════════════════════
+### MAIN BOOT SEQUENCE
+### ══════════════════════════════════════════════════════════════════════
+
+_setup_zram
+_load_modules
+_wait_devices
+
+# Find and mount live device
+live_dev=$(_find_live_device)
+[ -z "$live_dev" ] && _die "Cannot find Ventoy/live boot device."
+_log "Live device: $live_dev"
+
+sqfs_path=$(_mount_live "$live_dev")
+
+# STAGE 1: Pull squashfs entirely into RAM
+_copytoram "$sqfs_path"
+
+# STAGE 2: Set up overlayfs
+persist_dev=$(_find_persist)
+mkdir -p "$NEW_ROOT/run"
+
+if [ -n "$persist_dev" ]; then
+    _log "Persistence partition found: $persist_dev"
+    _mount_hybrid_overlay "$persist_dev"
+else
+    _log "No '$PERSIST_LABEL' partition found — volatile mode."
+    _mount_volatile
+fi
+
+# STAGE 3: Pivot to new root
+_log "Pivoting root..."
+mkdir -p "$NEW_ROOT/proc" "$NEW_ROOT/sys" "$NEW_ROOT/dev" "$NEW_ROOT/run"
+mount --move /proc "$NEW_ROOT/proc"
+mount --move /sys  "$NEW_ROOT/sys"
+mount --move /dev  "$NEW_ROOT/dev"
+
+# Write persist device path for lazy-sync service in userspace
+if [ -n "$persist_dev" ]; then
+    echo "$persist_dev" > "$NEW_ROOT/run/thatthing-persist-dev"
+fi
+
+# Hand off to init
+exec switch_root "$NEW_ROOT" /sbin/init "$@" \
+    || _die "switch_root failed — dropping to rescue shell."

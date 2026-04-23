@@ -1,0 +1,105 @@
+#!/bin/sh
+########################################################################
+# ThatThingOS v3.0 — OpenRC service: lazy-sync
+# File: /etc/init.d/lazy-sync
+#
+# Purpose: Periodically flush RAM overlay upper layer → HDD persist
+#          partition (THATHING_DATA) when the system is IDLE.
+#
+# Install:  rc-update add lazy-sync default
+# Managed:  /run/thatthing-persist-dev  (written by initramfs/init)
+########################################################################
+
+depend() {
+    need net localmount
+    after wildcard
+}
+
+SYNC_INTERVAL=1200          # 20 min between sync attempts
+IDLE_LOAD_THRESHOLD="0.80"  # skip sync if 1-min load avg > this
+OVERLAY_UPPER="/dev/shm/overlay_upper"
+PERSIST_MNT="/media/persist"
+LOG_TAG="lazy-sync"
+PIDFILE="/run/lazy-sync.pid"
+
+_log()  { logger -t "$LOG_TAG" "$*"; echo "[lazy-sync] $*"; }
+_warn() { logger -p user.warn -t "$LOG_TAG" "$*"; }
+
+_is_idle() {
+    local load
+    load=$(awk '{print $1}' /proc/loadavg)
+    # Use awk for float comparison — ash has no native float
+    awk -v l="$load" -v t="$IDLE_LOAD_THRESHOLD" \
+        'BEGIN{ exit (l > t) ? 1 : 0 }'
+}
+
+_get_persist_dev() {
+    [ -f /run/thatthing-persist-dev ] && cat /run/thatthing-persist-dev || true
+}
+
+_ensure_persist_mounted() {
+    local dev="$1"
+    if ! mountpoint -q "$PERSIST_MNT" 2>/dev/null; then
+        mkdir -p "$PERSIST_MNT"
+        mount -o rw,relatime "$dev" "$PERSIST_MNT" \
+            || { _warn "Cannot mount $dev → $PERSIST_MNT"; return 1; }
+    fi
+}
+
+_do_sync() {
+    local persist_dev
+    persist_dev=$(_get_persist_dev)
+    [ -z "$persist_dev" ] && { _warn "No persist device — skipping sync"; return; }
+
+    _ensure_persist_mounted "$persist_dev" || return
+
+    mkdir -p "$PERSIST_MNT/upper"
+
+    _log "Syncing RAM overlay → $PERSIST_MNT/upper ..."
+    local start
+    start=$(date +%s)
+
+    rsync -aAX --delete --no-whole-file --inplace \
+        "$OVERLAY_UPPER/" "$PERSIST_MNT/upper/" 2>&1 \
+        | logger -t "$LOG_TAG" || _warn "rsync had errors (continuing)"
+
+    local elapsed=$(( $(date +%s) - start ))
+    _log "Sync complete in ${elapsed}s."
+    sync
+}
+
+start() {
+    _log "Lazy sync daemon starting (interval: ${SYNC_INTERVAL}s)"
+    echo $$ > "$PIDFILE"
+
+    while true; do
+        sleep "$SYNC_INTERVAL" &
+        wait $!  # interruptible sleep
+
+        if _is_idle; then
+            _do_sync
+        else
+            _log "System busy (load > $IDLE_LOAD_THRESHOLD) — skipping sync."
+        fi
+    done &
+
+    echo $! > "$PIDFILE"
+    _log "Lazy sync PID: $(cat "$PIDFILE")"
+    return 0
+}
+
+stop() {
+    _log "Lazy sync stopping — performing FINAL blocking sync..."
+
+    # Kill the background loop
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null || true)
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null && wait "$pid" 2>/dev/null
+
+    # Final blocking flush — this must complete before power cuts
+    _do_sync
+
+    rm -f "$PIDFILE"
+    _log "Final sync complete."
+    return 0
+}
