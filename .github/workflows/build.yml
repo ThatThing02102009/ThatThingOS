@@ -18,11 +18,14 @@ jobs:
           sudo apt-get install -y build-essential squashfs-tools xorriso mtools dosfstools zstd bc kmod cpio flex bison libelf-dev libssl-dev
 
       - name: Execute Build Script
+        shell: bash
         run: |
-          # Cấp quyền thực thi và chạy script
+          # Cấp quyền thực thi cho toàn bộ script trong thư mục build
           chmod +x build.sh
-          # Chạy sudo vì script của bạn có thể cần quyền root để mount/chroot
-          sudo ./build.sh all
+          chmod +x build/*.sh
+          
+          # Chạy với user root của GitHub Actions nhưng truyền biến môi trường đầy đủ
+          sudo -E ./build.sh all
         
       - name: Release ISO
         if: success()
