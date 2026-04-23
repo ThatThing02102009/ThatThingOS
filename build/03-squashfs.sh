@@ -27,53 +27,52 @@ FROM alpine:3.19 AS rootfs
 ARG SQFS_MEM=12G
 
 # ── Core system (absolute minimum) ───────────────────────────────────
-RUN apk add --no-cache --update \
-    alpine-base \
-    openrc \
-    busybox-extras \
-    util-linux \
-    e2fsprogs \
-    parted \
-    rsync \
-    \
-    dialog \
-    \
-    wpa_supplicant \
-    wireless-tools \
-    iw \
-    iproute2 \
-    dhcpcd \
-    \
-    linux-firmware-i915 \
-    linux-firmware-iwlwifi \
-    linux-firmware-ath9k-htc \
-    linux-firmware-brcm \
-    linux-firmware-rtl_nic \
-    mesa-dri-gallium \
-    libva-intel-driver \
-    \
-    font-terminus \
-    \
-    sudo \
-    shadow \
-    \
-    bash \
-    curl \
-    wget \
-    tar \
-    gzip \
-    xz \
-    zstd \
-    ca-certificates \
-    tzdata \
-    \
-    pciutils \
-    usbutils \
-    lsof \
-    htop \
-    \
-    nano \
-    less
+RUN for i in 1 2 3; do \
+    apk update && \
+    apk add --no-cache \
+        openrc \
+        busybox-extras \
+        util-linux \
+        e2fsprogs \
+        parted \
+        rsync \
+        \
+        dialog \
+        \
+        wpa_supplicant \
+        wireless-tools \
+        iw \
+        iproute2 \
+        dhcpcd \
+        \
+        linux-firmware-intel \
+        linux-firmware-other \
+        mesa-dri-gallium \
+        libva-intel-media-driver \
+        \
+        font-terminus \
+        \
+        sudo \
+        shadow \
+        \
+        bash \
+        curl \
+        wget \
+        tar \
+        gzip \
+        xz \
+        zstd \
+        ca-certificates \
+        tzdata \
+        \
+        pciutils \
+        usbutils \
+        lsof \
+        htop \
+        \
+        nano \
+        less && break || sleep 5; \
+    done
 
 # ── Strip unneeded services ───────────────────────────────────────────
 # Only keep: networking, udev (for hw detection), syslog (for debug)
@@ -113,7 +112,7 @@ RUN mksquashfs / /rootfs.img \
     -no-progress \
     -noappend \
     -all-root \
-    -mem $SQFS_MEM
+    -mem ${SQFS_MEM}
 
 CMD ["/bin/sh"]
 EOF
