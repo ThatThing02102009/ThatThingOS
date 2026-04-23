@@ -71,7 +71,9 @@ check_deps() {
 
 # ── Banner ─────────────────────────────────────────────────────────────
 print_header() {
-    clear
+    if [ "${GITHUB_ACTIONS:-false}" != "true" ]; then
+        clear
+    fi
     echo -e "${C}${B}"
     cat <<'ASCII'
   ████████╗██╗  ██╗ █████╗ ████████╗████████╗██╗  ██╗██╗███╗   ██╗ ██████╗
