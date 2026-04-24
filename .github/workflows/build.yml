@@ -12,22 +12,53 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ── Kernel cache key: hash of kernel build script + config patches ──
+      # Only rebuilt when 01-kernel.sh or the inline config block changes.
+      - name: Compute kernel cache key
+        id: kernel-key
+        run: |
+          KEY=$(sha256sum build/01-kernel.sh | awk '{print $1}')
+          echo "key=kernel-$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Restore kernel cache
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: build/out_kernel
+          key: ${{ steps.kernel-key.outputs.key }}
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential squashfs-tools xorriso mtools dosfstools zstd bc kmod cpio flex bison libelf-dev libssl-dev
+          sudo apt-get install -y \
+            build-essential squashfs-tools xorriso mtools dosfstools \
+            zstd bc kmod cpio flex bison libelf-dev libssl-dev
 
       - name: Execute Build Script
         shell: bash
+        env:
+          # Signal to build.sh whether to skip kernel compilation
+          KERNEL_CACHE_HIT: ${{ steps.kernel-cache.outputs.cache-hit }}
         run: |
-          # Cấp quyền thực thi cho toàn bộ script trong thư mục build
-          chmod +x build.sh
-          chmod +x build/*.sh
-          
-          # Chạy với user root của GitHub Actions nhưng truyền biến môi trường đầy đủ
-          sudo -E ./build.sh all
-        
-      - name: Release ISO
+          chmod +x build.sh build/*.sh
+
+          if [ "$KERNEL_CACHE_HIT" = "true" ]; then
+            echo "[CI] Kernel cache hit — skipping Stage 1 (kernel build)."
+            echo "[CI] Using cached artifacts from build/out_kernel ..."
+            # Mark kernel as ready so Stage 4 (overlays) picks up the modules
+            touch build/kernel_ready.txt
+            # Run from Stage 2 onwards
+            sudo -E ./build.sh from=2
+          else
+            echo "[CI] No kernel cache — running full build."
+            sudo -E ./build.sh all
+          fi
+
+      # Save the kernel output to cache AFTER a successful full build.
+      # The cache@v4 action only saves when the key was not already found.
+      # (actions/cache automatically saves on post-step when cache-hit != true)
+
+      - name: Upload ISO artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:

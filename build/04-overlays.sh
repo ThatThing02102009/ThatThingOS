@@ -77,10 +77,10 @@ apply_overlays() {
 PERSIST_MNT="/media/persist"
 FLAG="$PERSIST_MNT/.first-boot-done"
 
-# Attempt to mount THATHING_DATA by label if not already mounted
+# ── Step 1: Mount persistence partition ──────────────────────────────────────
 if ! mountpoint -q "$PERSIST_MNT" 2>/dev/null; then
     mkdir -p "$PERSIST_MNT"
-    # Try label first, then fall back to UUID file written by initramfs
+    # Try label-based mount first (robust against /dev node reordering)
     if ! mount -L THATHING_DATA "$PERSIST_MNT" -o rw,relatime 2>/dev/null; then
         PERSIST_DEV=$(cat /run/thatthing-persist-dev 2>/dev/null || true)
         if [ -n "$PERSIST_DEV" ]; then
@@ -89,7 +89,21 @@ if ! mountpoint -q "$PERSIST_MNT" 2>/dev/null; then
     fi
 fi
 
-# Only skip TUI if persist is mounted AND the flag exists
+# ── Step 2: Wait-loop for slow/spinning HDDs ─────────────────────────────────
+# Race condition fix: on 5400 RPM drives the partition may not be accessible
+# immediately after boot. Wait up to 8 seconds before giving up.
+_waited=0
+while [ "$_waited" -lt 8 ]; do
+    if mountpoint -q "$PERSIST_MNT" 2>/dev/null; then
+        break
+    fi
+    # Retry mount every second while waiting
+    mount -L THATHING_DATA "$PERSIST_MNT" -o rw,relatime 2>/dev/null || true
+    sleep 1
+    _waited=$(( _waited + 1 ))
+done
+
+# ── Step 3: Check flag — only skip TUI when BOTH conditions are true ──────────
 if mountpoint -q "$PERSIST_MNT" 2>/dev/null && [ -f "$FLAG" ]; then
     exit 0
 fi

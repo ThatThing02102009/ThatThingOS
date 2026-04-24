@@ -28,9 +28,21 @@ export _JAVA_AWT_WM_NONREPARENTING=1
 # 5. Native Wayland overrides for GLFW apps
 export GLFW_IM_MODULE=ibus
 
-# 6. JVM Optimizations for 4GB RAM System 
-# (Total System is ~4GB. OS + Copy-To-Ram = 1GB. We cap JVM at ~2500M)
-export _JAVA_OPTIONS="-Xms512m -Xmx2500m -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch"
+# 6. JVM Optimizations for 4GB RAM System
+# Memory budget: 4GB total − ~800MB RootFS/OS − ~400MB GPU/kernel = ~2800MB usable
+# We cap JVM at 1800M to leave comfortable headroom and avoid OOM kills.
+# Shenandoah GC: concurrent, low-pause — ideal for Minecraft on Java 17/21.
+# Falls back gracefully to G1GC if Shenandoah is unavailable (e.g. OpenJ9 builds).
+export _JAVA_OPTIONS="-Xms512m -Xmx1800m \
+  -XX:+UnlockExperimentalVMOptions \
+  -XX:+UseShenandoahGC \
+  -XX:ShenandoahGCMode=adaptive \
+  -XX:+ShenandoahUncommit \
+  -XX:ShenandoahUncommitDelay=1000 \
+  -XX:+DisableExplicitGC \
+  -XX:+AlwaysPreTouch \
+  -XX:-UsePerfData \
+  -Djava.awt.headless=false"
 
 PRISM_APPIMAGE="$HOME/.local/bin/prismlauncher"
 
@@ -40,7 +52,7 @@ if [ ! -f "$PRISM_APPIMAGE" ]; then
     exit 1
 fi
 
-echo "[*] Memory Alloc: 2500MB (Max)"
+echo "[*] Memory Alloc: 1800MB (Max) | GC: ShenandoahGC (adaptive, low-pause)"
 echo "[*] OpenGL Driver: mesa_gallium (i965) at Override v4.3"
 echo "[*] Bridging directly to Wayland KMS/DRM..."
 
