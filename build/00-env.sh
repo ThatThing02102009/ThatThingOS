@@ -53,17 +53,33 @@ check_deps() {
     log "Checking host build tools..."
     mkdir -p "$OUT_DIR" "$BUILD_DIR"
 
-    local required=(docker cpio find xorriso mksquashfs unsquashfs \
+    local required=(cpio find xorriso mksquashfs unsquashfs \
                     busybox grub-mkstandalone mcopy mmd mkfs.fat rsync \
-                    blkid gzip xz)
+                    blkid gzip xz zstd wget curl make clang lld llvm-strip \
+                    patch awk flex bison bc)
     local missing=()
     for cmd in "${required[@]}"; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
 
     if [ ${#missing[@]} -gt 0 ]; then
-        die "Missing host tools: ${missing[*]}
-  Install: sudo pacman -S squashfs-tools mtools dosfstools grub syslinux rsync"
+        warn "Missing host tools: ${missing[*]}"
+        log "Installing Ubuntu/Colab dependencies..."
+        sudo apt-get update -y || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            squashfs-tools mtools dosfstools grub-efi-amd64-bin grub-pc-bin \
+            rsync busybox-static curl wget tar gzip xz-utils zstd cpio \
+            findutils xorriso libssl-dev libelf-dev flex bison build-essential \
+            python3 bc clang lld llvm kmod pahole
+        
+        # Verify again
+        missing=()
+        for cmd in "${required[@]}"; do
+            command -v "$cmd" &>/dev/null || missing+=("$cmd")
+        done
+        if [ ${#missing[@]} -gt 0 ]; then
+            die "Still missing host tools after apt-get: ${missing[*]}"
+        fi
     fi
 
     ok "All host tools present."

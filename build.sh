@@ -81,8 +81,8 @@ run_stage 4 "Overlay Injection (lazy-sync, TUI, services)" "$BUILD_MODULES/04-ov
 run_stage 5 "ISO Assembly (Hybrid BIOS+UEFI)"              "$BUILD_MODULES/05-iso.sh"
 
 # ── Cleanup ──────────────────────────────────────────────────────────
-log "Pruning dangling Docker images..."
-docker image prune -f > /dev/null 2>&1 || true
+log "Cleaning up build artifacts..."
+rm -vf "$BUILD_DIR/"*.tar.gz "$BUILD_DIR/"*.tar.xz 2>/dev/null || true
 
 # ── Summary ──────────────────────────────────────────────────────────
 echo ""
